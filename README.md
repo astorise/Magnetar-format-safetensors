@@ -5,8 +5,7 @@
 A Safetensors Model Artifact parser for the
 [Magnetar](https://github.com/astorise/Magnetar) local AI Runtime. It reads
 Safetensors-encoded weight files and produces Magnetar's generic,
-Provider-agnostic types (`ModelArtifact`, `TensorDescriptor`,
-`QuantizationDescriptor`, normalized tokenizer/model metadata) at the
+Provider-agnostic types (`ModelTensorMetadata`, `ModelDType`) at the
 boundary into `magnetar-runtime` -- `magnetar-runtime` SHALL have zero
 dependency on this crate or any Safetensors-specific type, per Magnetar's
 architectural invariant that Providers and Format parsers own
@@ -15,36 +14,48 @@ generic.
 
 ## Status
 
-**Empty template.** This crate is currently a bare `cargo new --lib`
-scaffold: no Safetensors parsing exists here yet. `magnetar-runtime`'s E2E
-conformance fixtures currently supply weights as a plain in-memory
-`BTreeMap<String, HostTensor>` with no serialized byte format at all --
-there is no real Model Artifact byte format anywhere in the Magnetar
-workspace today. Building a real parser here is required before
-`reach-architecture-freeze-1` task group 8 (Model Loading creates the exact
-weight resources consumed by execution) can close its remaining `8.1`/`8.2`
-tasks (build a real minimal Model Artifact; parse it through Model
-Loading).
+**Real parser, not a template.** `parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError>`
+reads the 8-byte header-length prefix, the JSON header, and normalizes every
+tensor entry into `ModelTensorMetadata` plus a flat `__metadata__` string
+map. Every standard Safetensors dtype string round-trips through
+`ModelDType::parse` (`BOOL`, `U8`/`I8`, `U16`/`I16`, `U32`/`I32`, `U64`/`I64`,
+`F16`, `BF16`, `F32`, `F64`); the two 8-bit float dtypes Safetensors also
+defines (`F8_E4M3`, `F8_E5M2`) have no `ModelDType` equivalent yet and are
+rejected structurally, not silently mapped.
 
-## Requirements once implemented
+Overflow and bounds safety: every offset/size computation uses checked
+arithmetic, declared tensor byte ranges are validated against the file's
+actual length, and overlapping tensor ranges are rejected outright
+(matching upstream `safetensors`' own post-CVE hardening). 15 unit tests
+plus a 20-entry checked-in malformed-input corpus (`tests/corpus/`) prove
+every category of malformed input is rejected with a structured error, not
+a panic. A `cargo-fuzz` target (`fuzz/fuzz_targets/parse.rs`) exercises the
+same entry point for offline/periodic fuzzing (`cargo +nightly fuzz build`
+verified to build; live execution requires a sanitizer-runtime-equipped
+environment -- not exercised on the Windows machine this crate was
+developed on, a real, documented gap rather than an implicit claim of full
+local fuzzing coverage).
 
-Per the audit that scoped this submodule (see `reach-architecture-freeze-1`
-Correctif 16 in the main repository), a real parser here must:
+Deliberately not a full `ModelManifest`: a bare Safetensors file carries no
+model identity, architecture, or digest, so `SafetensorsArtifact` is a
+narrower tensor inventory + metadata map; assembling a `ModelManifest` from
+it plus external context is the caller's job.
 
-- Produce only generic types across the boundary into `magnetar-runtime`
-  (never leak Safetensors-specific structs).
-- Reject overflow, out-of-bounds offsets/tensor sizes, and overlapping or
-  absurd dimensions -- Safetensors files are untrusted input, including
-  their JSON header.
-- Never panic on malformed input; carry a fuzzing and corpus regression
-  suite proving this.
+## Governing contract
+
+[`safetensors-format`](https://github.com/astorise/Magnetar/blob/main/openspec/changes/implement-model-format-parsers/specs/safetensors-format/spec.md)
+in the main Magnetar repository's OpenSpec change set defines this crate's
+requirements in full (type-boundary discipline, overflow/panic safety,
+corpus/fuzz coverage). `model-format-roadmap`'s "Safetensors Support"
+requirement records that support as implemented, not aspirational, as of
+this crate.
 
 ## Relationship to magnetar-runtime
 
-`magnetar-runtime` has zero dependency on this crate today (verified by a
-static guard in that repository's test suite) and is expected to keep it
-that way even once this parser is real -- Model Loading consumes whatever
-generic `ModelArtifact` this crate produces, never Safetensors types
-directly. It is pinned into the main
-[Magnetar](https://github.com/astorise/Magnetar) repository as a git
-submodule at `formats/safetensors`.
+This crate depends only on `magnetar-runtime`'s public `model` module types
+(`formats/safetensors -> magnetar-runtime`, never the reverse) --
+`magnetar-runtime` compiling and testing cleanly without this crate present,
+and never appearing in its own dependency graph, is verified by a static CI
+guard (`.github/workflows/quality.yml`'s `submodule-integration` job). It is
+pinned into the main [Magnetar](https://github.com/astorise/Magnetar)
+repository as a git submodule at `formats/safetensors`.
