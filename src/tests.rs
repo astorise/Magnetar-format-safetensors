@@ -220,3 +220,98 @@ fn malformed_input_corpus_never_panics() {
     }
     assert!(checked > 0, "corpus directory must not be empty");
 }
+
+/// Builds real Safetensors bytes for `magnetar-runtime`'s E2E fixture
+/// weights (`e2e_fixture_config`/`e2e_fixture_weights`, both public exactly
+/// so this crate's tests can call them). Lives here, not in
+/// `magnetar-runtime`, because generating *and proving parseable* a real
+/// fixture file needs both `serialize` and `parse` in the same test, and
+/// `magnetar-runtime` cannot depend on this crate even as a dev-dependency
+/// (`materialize-weights-from-real-model-artifact`'s design.md).
+fn build_e2e_fixture_safetensors_bytes() -> Vec<u8> {
+    let config = magnetar_runtime::e2e_fixture_config();
+    let weights = magnetar_runtime::e2e_fixture_weights(&config)
+        .expect("deterministic fixture weights build");
+
+    // Owns the raw little-endian byte buffers so `TensorToSerialize` can
+    // borrow from them; `weights` is a `BTreeMap`, so iteration order (and
+    // therefore each tensor's byte offset in the file) is already
+    // deterministic by tensor name.
+    let byte_buffers: Vec<(String, Vec<u8>)> = weights
+        .iter()
+        .map(|(name, tensor)| {
+            let mut bytes = Vec::with_capacity(tensor.data.len() * 4);
+            for value in &tensor.data {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            (name.clone(), bytes)
+        })
+        .collect();
+
+    let tensors: Vec<TensorToSerialize<'_>> = byte_buffers
+        .iter()
+        .map(|(name, bytes)| TensorToSerialize {
+            name,
+            dtype: ModelDType::F32,
+            shape: weights[name].shape.clone(),
+            data: bytes,
+        })
+        .collect();
+
+    serialize(&tensors, &BTreeMap::new())
+        .expect("fixture tensors are all F32, serialize cannot fail")
+}
+
+#[test]
+fn e2e_fixture_weights_round_trip_through_real_safetensors_bytes() {
+    let config = magnetar_runtime::e2e_fixture_config();
+    let expected_weights = magnetar_runtime::e2e_fixture_weights(&config).unwrap();
+
+    let file_bytes = build_e2e_fixture_safetensors_bytes();
+    let artifact = parse(&file_bytes).expect("generated fixture bytes parse cleanly");
+
+    assert_eq!(artifact.tensors.len(), expected_weights.len());
+    for tensor in &artifact.tensors {
+        assert_eq!(tensor.storage_dtype, ModelDType::F32);
+        let expected = &expected_weights[&tensor.name];
+        assert_eq!(tensor.shape, expected.shape);
+
+        let start = usize::try_from(tensor.offset_bytes.unwrap()).unwrap();
+        let end = usize::try_from(tensor.size_bytes.unwrap()).unwrap() + start;
+        let data_start = HEADER_LENGTH_PREFIX_BYTES
+            + usize::try_from(u64::from_le_bytes(file_bytes[..8].try_into().unwrap())).unwrap();
+        let raw = &file_bytes[data_start + start..data_start + end];
+        let values: Vec<f32> = raw
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|chunk| f32::from_le_bytes(*chunk))
+            .collect();
+        assert_eq!(values, expected.data);
+    }
+}
+
+/// Prints the real fixture file's bytes as a hex string on stdout, and its
+/// sha256 digest, when run with `cargo test -- --ignored --nocapture
+/// print_e2e_fixture_safetensors_bytes_for_regeneration`. Not part of the
+/// normal test run: this is the manual, one-off generation step for the
+/// checked-in `magnetar-runtime/fixtures/e2e-fixture-weights.safetensors`
+/// file (the same manual two-command pattern the real Qwen wasm Component
+/// binary fixture already uses), re-run only when
+/// `e2e_fixture_weights`/`e2e_fixture_config` change.
+#[test]
+#[ignore = "manual fixture-regeneration tool, not a real test assertion"]
+fn print_e2e_fixture_safetensors_bytes_for_regeneration() {
+    let bytes = build_e2e_fixture_safetensors_bytes();
+    let digest = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        hasher.finalize()
+    };
+    println!("sha256:{digest:x}");
+    for byte in &bytes {
+        print!("{byte:02x}");
+    }
+    println!();
+}

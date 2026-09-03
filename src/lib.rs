@@ -324,6 +324,106 @@ pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
     Ok(SafetensorsArtifact { tensors, metadata })
 }
 
+/// One tensor to encode via [`serialize`]. `data` SHALL already be the raw
+/// little-endian bytes for `dtype` -- this function performs no numeric
+/// conversion, only byte-layout encoding.
+pub struct TensorToSerialize<'a> {
+    pub name: &'a str,
+    pub dtype: ModelDType,
+    pub shape: Vec<u64>,
+    pub data: &'a [u8],
+}
+
+/// Encodes tensors and an optional flat metadata map into a real Safetensors
+/// byte buffer -- the inverse of [`parse`]. Exists so this crate's own test
+/// suite can generate and round-trip-verify fixture files (including the
+/// checked-in fixture `magnetar-runtime` embeds via `include_bytes!`):
+/// `magnetar-runtime` cannot depend on this crate even as a dev-dependency
+/// (`externalize-runtime-extension-modules`'s CI guard, empirically
+/// verified to catch dev-dependencies too -- see
+/// `materialize-weights-from-real-model-artifact`'s design.md), so proving
+/// a generated fixture is genuinely parseable has to happen here, on the
+/// side of the boundary allowed to depend on `magnetar-runtime`.
+pub fn serialize(
+    tensors: &[TensorToSerialize<'_>],
+    metadata: &BTreeMap<String, String>,
+) -> Result<Vec<u8>, SafetensorsError> {
+    let mut header = serde_json::Map::new();
+    if !metadata.is_empty() {
+        let mut meta = serde_json::Map::new();
+        for (key, value) in metadata {
+            meta.insert(key.clone(), serde_json::Value::String(value.clone()));
+        }
+        header.insert("__metadata__".to_string(), serde_json::Value::Object(meta));
+    }
+
+    let mut data_section = Vec::new();
+    let mut offset = 0_u64;
+    for tensor in tensors {
+        let dtype_str = dtype_to_safetensors_string(tensor.dtype).ok_or_else(|| {
+            SafetensorsError::UnknownDType {
+                name: tensor.name.to_string(),
+                dtype: format!("{:?}", tensor.dtype),
+            }
+        })?;
+        let start = offset;
+        let end = offset + tensor.data.len() as u64;
+        let mut entry = serde_json::Map::new();
+        entry.insert(
+            "dtype".to_string(),
+            serde_json::Value::String(dtype_str.to_string()),
+        );
+        entry.insert(
+            "shape".to_string(),
+            serde_json::Value::Array(
+                tensor
+                    .shape
+                    .iter()
+                    .map(|dimension| serde_json::Value::from(*dimension))
+                    .collect(),
+            ),
+        );
+        entry.insert(
+            "data_offsets".to_string(),
+            serde_json::Value::Array(vec![
+                serde_json::Value::from(start),
+                serde_json::Value::from(end),
+            ]),
+        );
+        header.insert(tensor.name.to_string(), serde_json::Value::Object(entry));
+        data_section.extend_from_slice(tensor.data);
+        offset = end;
+    }
+
+    let header_bytes = serde_json::to_vec(&serde_json::Value::Object(header))
+        .expect("a Map of Values always serializes");
+    let mut file =
+        Vec::with_capacity(HEADER_LENGTH_PREFIX_BYTES + header_bytes.len() + data_section.len());
+    file.extend_from_slice(&(header_bytes.len() as u64).to_le_bytes());
+    file.extend_from_slice(&header_bytes);
+    file.extend_from_slice(&data_section);
+    Ok(file)
+}
+
+fn dtype_to_safetensors_string(dtype: ModelDType) -> Option<&'static str> {
+    match dtype {
+        ModelDType::Bool => Some("BOOL"),
+        ModelDType::U8 => Some("U8"),
+        ModelDType::I8 => Some("I8"),
+        ModelDType::U16 => Some("U16"),
+        ModelDType::I16 => Some("I16"),
+        ModelDType::F16 => Some("F16"),
+        ModelDType::Bf16 => Some("BF16"),
+        ModelDType::U32 => Some("U32"),
+        ModelDType::I32 => Some("I32"),
+        ModelDType::F32 => Some("F32"),
+        ModelDType::U64 => Some("U64"),
+        ModelDType::I64 => Some("I64"),
+        ModelDType::F64 => Some("F64"),
+        ModelDType::Q4K | ModelDType::Q5K | ModelDType::Q8 => None,
+    }
+}
+
 /// Byte width of one element for dtypes with a fixed per-element size.
 /// `None` for block-quantized dtypes (`Q4K`/`Q5K`/`Q8`) that `ModelDType`
 /// models for GGUF's sake, not Safetensors': no standard Safetensors dtype

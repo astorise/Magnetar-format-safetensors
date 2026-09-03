@@ -16,3 +16,6 @@ edition = "2024"
 # types (`ModelTensorMetadata`, `ModelDType`).
 magnetar-runtime = { path = "../../magnetar-runtime" }
 serde_json = "1"
+
+[dev-dependencies]
+sha2 = "0.10"
