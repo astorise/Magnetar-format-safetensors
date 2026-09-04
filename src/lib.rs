@@ -301,6 +301,7 @@ pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
             size_bytes: Some(declared_length),
             quantization: None,
             expected_compute_dtype: None,
+            digest: None,
         });
     }
 
