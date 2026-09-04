@@ -48,6 +48,53 @@ fn well_formed_multi_tensor_file_parses_expected_metadata() {
     assert_eq!(b.size_bytes, Some(16));
 }
 
+/// `bind-materialized-weight-content-to-model-artifact-digests`: an F32
+/// tensor's `ModelTensorMetadata.digest` is a real content digest, not a
+/// placeholder -- it verifies against that exact tensor's real bytes as
+/// parsed from the file, and correctly rejects tampered bytes.
+#[test]
+fn f32_tensor_digest_verifies_against_its_real_bytes() {
+    let header = r#"{"weight": {"dtype": "F32", "shape": [4], "data_offsets": [0, 16]}}"#;
+    let data: Vec<u8> = (0..16u8).collect();
+    let file = build_file(header, &data);
+
+    let artifact = parse(&file).expect("well-formed file parses");
+    let tensor = artifact
+        .tensors
+        .iter()
+        .find(|t| t.name == "weight")
+        .unwrap();
+    let digest = tensor
+        .digest
+        .as_ref()
+        .expect("an F32 tensor should have a computed content digest");
+
+    digest
+        .verify_bytes(&data)
+        .expect("digest verifies against the tensor's own real bytes");
+
+    let mut tampered = data;
+    tampered[0] ^= 0xFF;
+    assert!(
+        digest.verify_bytes(&tampered).is_err(),
+        "digest must reject tampered content"
+    );
+}
+
+/// Non-`F32` dtypes cannot be materialized into a `HostTensor` without a
+/// re-encoding step this crate does not perform, so their content cannot
+/// be meaningfully digested here -- `digest: None` is correct, not an
+/// oversight.
+#[test]
+fn non_f32_tensor_has_no_content_digest() {
+    let header = r#"{"weight": {"dtype": "I8", "shape": [4], "data_offsets": [0, 4]}}"#;
+    let data = vec![0u8; 4];
+    let file = build_file(header, &data);
+
+    let artifact = parse(&file).expect("well-formed file parses");
+    assert!(artifact.tensors[0].digest.is_none());
+}
+
 #[test]
 fn every_standard_dtype_string_round_trips() {
     let cases: &[(&str, ModelDType, u64)] = &[
