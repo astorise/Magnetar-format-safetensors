@@ -20,4 +20,4 @@ magnetar-runtime = { path = "../../magnetar-runtime" }
 serde_json = "1"
 
 [dev-dependencies]
-sha2 = "0.10"
+sha2 = "0.11"
