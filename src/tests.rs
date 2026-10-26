@@ -356,7 +356,7 @@ fn print_e2e_fixture_safetensors_bytes_for_regeneration() {
         hasher.update(&bytes);
         hasher.finalize()
     };
-    println!("sha256:{digest:x}");
+    println!("sha256:{}", digest.iter().map(|b| format!("{b:02x}")).collect::<String>());
     for byte in &bytes {
         print!("{byte:02x}");
     }
