@@ -451,6 +451,8 @@ fn dtype_to_safetensors_string(dtype: ModelDType) -> Option<&'static str> {
         ModelDType::F64 => Some("F64"),
         ModelDType::Q2K
         | ModelDType::Q3K
+        | ModelDType::Iq4Nl
+        | ModelDType::Iq4Xs
         | ModelDType::Q4K
         | ModelDType::Q5K
         | ModelDType::Q6K
@@ -471,6 +473,8 @@ fn fixed_element_byte_width(dtype: ModelDType) -> Option<u64> {
         ModelDType::U64 | ModelDType::I64 | ModelDType::F64 => Some(8),
         ModelDType::Q2K
         | ModelDType::Q3K
+        | ModelDType::Iq4Nl
+        | ModelDType::Iq4Xs
         | ModelDType::Q4K
         | ModelDType::Q5K
         | ModelDType::Q6K
