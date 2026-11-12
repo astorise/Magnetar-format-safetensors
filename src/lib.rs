@@ -449,12 +449,24 @@ fn dtype_to_safetensors_string(dtype: ModelDType) -> Option<&'static str> {
         ModelDType::U64 => Some("U64"),
         ModelDType::I64 => Some("I64"),
         ModelDType::F64 => Some("F64"),
-        ModelDType::Q4K | ModelDType::Q5K | ModelDType::Q8 => None,
+        ModelDType::Q2K
+        | ModelDType::Q3K
+        | ModelDType::Iq4Nl
+        | ModelDType::Iq4Xs
+        | ModelDType::Iq2Xxs
+        | ModelDType::Iq2Xs
+        | ModelDType::Iq2S
+        | ModelDType::Iq3Xxs
+        | ModelDType::Iq3S
+        | ModelDType::Q4K
+        | ModelDType::Q5K
+        | ModelDType::Q6K
+        | ModelDType::Q8 => None,
     }
 }
 
 /// Byte width of one element for dtypes with a fixed per-element size.
-/// `None` for block-quantized dtypes (`Q4K`/`Q5K`/`Q8`) that `ModelDType`
+/// `None` for block-quantized dtypes (`Q4K`/`Q5K`/`Q6K`/`Q8`) that `ModelDType`
 /// models for GGUF's sake, not Safetensors': no standard Safetensors dtype
 /// string maps to them, so a shape/byte-size cross-check is meaningless for
 /// them here (bounds/overflow checks on the declared range still apply).
@@ -464,7 +476,19 @@ fn fixed_element_byte_width(dtype: ModelDType) -> Option<u64> {
         ModelDType::U16 | ModelDType::I16 | ModelDType::F16 | ModelDType::Bf16 => Some(2),
         ModelDType::U32 | ModelDType::I32 | ModelDType::F32 => Some(4),
         ModelDType::U64 | ModelDType::I64 | ModelDType::F64 => Some(8),
-        ModelDType::Q4K | ModelDType::Q5K | ModelDType::Q8 => None,
+        ModelDType::Q2K
+        | ModelDType::Q3K
+        | ModelDType::Iq4Nl
+        | ModelDType::Iq4Xs
+        | ModelDType::Iq2Xxs
+        | ModelDType::Iq2Xs
+        | ModelDType::Iq2S
+        | ModelDType::Iq3Xxs
+        | ModelDType::Iq3S
+        | ModelDType::Q4K
+        | ModelDType::Q5K
+        | ModelDType::Q6K
+        | ModelDType::Q8 => None,
     }
 }
 
