@@ -59,3 +59,33 @@ and never appearing in its own dependency graph, is verified by a static CI
 guard (`.github/workflows/quality.yml`'s `submodule-integration` job). It is
 pinned into the main [Magnetar](https://github.com/astorise/Magnetar)
 repository as a git submodule at `formats/safetensors`.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and on every push to
+`main`. It calls the Module CI workflow that the main
+[Magnetar](https://github.com/astorise/Magnetar) repository defines once for
+all module repositories
+([`submodule-ci.yml`](https://github.com/astorise/Magnetar/blob/main/.github/workflows/submodule-ci.yml)):
+formatting, Clippy with warnings denied, tests with the committed `Cargo.lock`, and `cargo-deny`.
+
+The crate is built inside a Magnetar checkout, at `formats/safetensors`, with the Rust
+toolchain Magnetar pins. The Magnetar revision is the branch named like this
+repository's branch when Magnetar has one, otherwise Magnetar's `main`; the
+first step of each run prints which one was used. A change that spans both
+repositories is validated by pushing the Magnetar branch first, then a branch
+of the same name here.
+
+A test failure that names `Cargo.lock` means the Runtime's dependency set
+changed in Magnetar; refresh the lockfile with `cargo update -w` from this
+crate's directory inside a Magnetar checkout.
+
+To reproduce the checks locally, from a Magnetar checkout with this
+repository at its submodule path:
+
+```bash
+cargo fmt --manifest-path formats/safetensors/Cargo.toml -- --check
+cargo clippy --locked --manifest-path formats/safetensors/Cargo.toml --all-targets -- -D warnings
+cargo test --locked --manifest-path formats/safetensors/Cargo.toml
+cargo deny --manifest-path formats/safetensors/Cargo.toml check
+```
