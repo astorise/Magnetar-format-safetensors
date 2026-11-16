@@ -461,6 +461,7 @@ fn dtype_to_safetensors_string(dtype: ModelDType) -> Option<&'static str> {
         | ModelDType::Q4K
         | ModelDType::Q5K
         | ModelDType::Q6K
+        | ModelDType::Q4
         | ModelDType::Q8 => None,
     }
 }
@@ -488,6 +489,7 @@ fn fixed_element_byte_width(dtype: ModelDType) -> Option<u64> {
         | ModelDType::Q4K
         | ModelDType::Q5K
         | ModelDType::Q6K
+        | ModelDType::Q4
         | ModelDType::Q8 => None,
     }
 }
