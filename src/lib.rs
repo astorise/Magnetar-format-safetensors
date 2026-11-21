@@ -291,23 +291,11 @@ pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
         }
 
         ranges.push((start, end, name.clone()));
-        // A real content digest, computed from this tensor's actual bytes
-        // in the file -- not a placeholder. Only for `F32`: that is the
-        // one dtype `magnetar-runtime`'s `host_tensors_from_artifact_bytes`
-        // materializes into a `HostTensor` today (every other declared
-        // dtype is rejected structurally at that boundary), and
-        // Safetensors' own on-disk `F32` byte layout -- raw, native-width,
-        // little-endian IEEE754 -- is already byte-identical to
-        // `HostTensor::content_bytes()`'s canonical little-endian
-        // representation, so no re-encoding step could introduce a
-        // mismatch between what is hashed here and what
-        // `WeightMaterializationTransaction::stage_weight` verifies later.
-        // Other dtypes stay `digest: None` -- permissive, not a
-        // regression, matching this field's own "absent means unknown"
-        // semantics; they cannot be verified this way without first
-        // defining a canonical byte representation for each, which is
-        // future work, not something to guess at here.
-        let digest = (dtype == ModelDType::F32)
+        // F32's stored bytes already match the materialized HostTensor.
+        // E4M3FN's digest instead binds the raw bytes for its loader's
+        // on-demand conversion; the converted F32 tensor must clear it.
+        // Other converted dtypes have no canonical stored-byte digest yet.
+        let digest = matches!(dtype, ModelDType::F32 | ModelDType::F8E4M3Fn)
             .then(|| {
                 let tensor_start = header_end
                     .checked_add(usize::try_from(start).ok()?)

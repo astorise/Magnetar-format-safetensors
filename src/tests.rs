@@ -81,10 +81,7 @@ fn f32_tensor_digest_verifies_against_its_real_bytes() {
     );
 }
 
-/// Non-`F32` dtypes cannot be materialized into a `HostTensor` without a
-/// re-encoding step this crate does not perform, so their content cannot
-/// be meaningfully digested here -- `digest: None` is correct, not an
-/// oversight.
+/// Integer tensor content is not normalized into a HostTensor here.
 #[test]
 fn non_f32_tensor_has_no_content_digest() {
     let header = r#"{"weight": {"dtype": "I8", "shape": [4], "data_offsets": [0, 4]}}"#;
@@ -93,6 +90,16 @@ fn non_f32_tensor_has_no_content_digest() {
 
     let artifact = parse(&file).expect("well-formed file parses");
     assert!(artifact.tensors[0].digest.is_none());
+}
+
+#[test]
+fn fp8_digest_binds_the_original_encoded_bytes() {
+    let header = r#"{"weight": {"dtype": "F8_E4M3", "shape": [4], "data_offsets": [0, 4]}}"#;
+    let data = [0x00, 0x38, 0x7e, 0xff];
+    let artifact = parse(&build_file(header, &data)).unwrap();
+    let digest = artifact.tensors[0].digest.as_ref().unwrap();
+    assert!(digest.verify_bytes(&data).is_ok());
+    assert!(digest.verify_bytes(&[0x00, 0x38, 0x7e, 0xfe]).is_err());
 }
 
 #[test]
