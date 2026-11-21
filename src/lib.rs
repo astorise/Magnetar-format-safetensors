@@ -167,9 +167,31 @@ impl std::error::Error for SafetensorsError {}
 /// Parses a complete Safetensors file already held in memory. See the
 /// module documentation for the format and safety discipline.
 pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
-    if bytes.len() < HEADER_LENGTH_PREFIX_BYTES {
+    parse_inner(bytes, bytes.len() as u64, true)
+}
+
+/// Parses a header without loading the file's tensor payloads. `header_bytes`
+/// must contain the length prefix and the entire declared JSON header, and
+/// `file_length` must be the actual size obtained from the open file. Tensor
+/// ranges are checked against that length exactly as in [`parse`]. No content
+/// digests are returned because this function has not read the payloads.
+pub fn parse_header(
+    header_bytes: &[u8],
+    file_length: u64,
+) -> Result<SafetensorsArtifact, SafetensorsError> {
+    parse_inner(header_bytes, file_length, false)
+}
+
+fn parse_inner(
+    bytes: &[u8],
+    file_length: u64,
+    hash_payload: bool,
+) -> Result<SafetensorsArtifact, SafetensorsError> {
+    if bytes.len() < HEADER_LENGTH_PREFIX_BYTES || file_length < HEADER_LENGTH_PREFIX_BYTES as u64 {
         return Err(SafetensorsError::FileTooShortForHeaderLength {
-            file_length: bytes.len(),
+            file_length: bytes
+                .len()
+                .min(usize::try_from(file_length).unwrap_or(usize::MAX)),
         });
     }
     let header_length_bytes: [u8; HEADER_LENGTH_PREFIX_BYTES] = bytes[..HEADER_LENGTH_PREFIX_BYTES]
@@ -179,7 +201,8 @@ pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
 
     // `bytes.len()` is an already-trusted, already-allocated slice length;
     // widening it to `u64` can never truncate on any real Rust target.
-    let available = (bytes.len() - HEADER_LENGTH_PREFIX_BYTES) as u64;
+    let available = ((bytes.len() - HEADER_LENGTH_PREFIX_BYTES) as u64)
+        .min(file_length - HEADER_LENGTH_PREFIX_BYTES as u64);
     if header_length > available {
         return Err(SafetensorsError::HeaderLengthExceedsFile {
             declared: header_length,
@@ -205,7 +228,7 @@ pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
         .as_object()
         .ok_or(SafetensorsError::HeaderNotJsonObject)?;
 
-    let data_section_length = available - header_length as u64;
+    let data_section_length = file_length - header_end as u64;
 
     let mut tensors = Vec::with_capacity(header_object.len());
     let mut metadata = BTreeMap::new();
@@ -295,7 +318,7 @@ pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
         // E4M3FN's digest instead binds the raw bytes for its loader's
         // on-demand conversion; the converted F32 tensor must clear it.
         // Other converted dtypes have no canonical stored-byte digest yet.
-        let digest = matches!(dtype, ModelDType::F32 | ModelDType::F8E4M3Fn)
+        let digest = (hash_payload && matches!(dtype, ModelDType::F32 | ModelDType::F8E4M3Fn))
             .then(|| {
                 let tensor_start = header_end
                     .checked_add(usize::try_from(start).ok()?)

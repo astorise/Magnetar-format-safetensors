@@ -48,6 +48,33 @@ fn well_formed_multi_tensor_file_parses_expected_metadata() {
     assert_eq!(b.size_bytes, Some(16));
 }
 
+#[test]
+fn header_only_parsing_validates_the_file_size_without_fabricating_digests() {
+    let header = r#"{"weight": {"dtype": "F8_E4M3", "shape": [2, 2], "data_offsets": [0, 4]},
+        "scale": {"dtype": "F32", "shape": [1], "data_offsets": [4, 8]}}"#;
+    let file = build_file(header, &[0x38, 0x40, 0x48, 0x50, 0, 0, 0x80, 0x3f]);
+    let header_end = HEADER_LENGTH_PREFIX_BYTES + header.len();
+    let parsed = parse_header(&file[..header_end], file.len() as u64).unwrap();
+    let mut full = parse(&file).unwrap();
+    assert!(full.tensors.iter().all(|tensor| tensor.digest.is_some()));
+    for tensor in &mut full.tensors {
+        tensor.digest = None;
+    }
+    assert_eq!(parsed, full);
+    assert!(matches!(
+        parse_header(&file[..header_end], (file.len() - 1) as u64),
+        Err(SafetensorsError::ByteRangeOutOfBounds { .. })
+    ));
+    assert!(matches!(
+        parse_header(&file[..header_end - 1], file.len() as u64),
+        Err(SafetensorsError::HeaderLengthExceedsFile { .. })
+    ));
+    assert!(matches!(
+        parse_header(&file[..header_end], 7),
+        Err(SafetensorsError::FileTooShortForHeaderLength { .. })
+    ));
+}
+
 /// `bind-materialized-weight-content-to-model-artifact-digests`: an F32
 /// tensor's `ModelTensorMetadata.digest` is a real content digest, not a
 /// placeholder -- it verifies against that exact tensor's real bytes as
