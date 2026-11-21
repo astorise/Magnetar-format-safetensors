@@ -48,6 +48,33 @@ fn well_formed_multi_tensor_file_parses_expected_metadata() {
     assert_eq!(b.size_bytes, Some(16));
 }
 
+#[test]
+fn header_only_parsing_validates_the_file_size_without_fabricating_digests() {
+    let header = r#"{"weight": {"dtype": "F8_E4M3", "shape": [2, 2], "data_offsets": [0, 4]},
+        "scale": {"dtype": "F32", "shape": [1], "data_offsets": [4, 8]}}"#;
+    let file = build_file(header, &[0x38, 0x40, 0x48, 0x50, 0, 0, 0x80, 0x3f]);
+    let header_end = HEADER_LENGTH_PREFIX_BYTES + header.len();
+    let parsed = parse_header(&file[..header_end], file.len() as u64).unwrap();
+    let mut full = parse(&file).unwrap();
+    assert!(full.tensors.iter().all(|tensor| tensor.digest.is_some()));
+    for tensor in &mut full.tensors {
+        tensor.digest = None;
+    }
+    assert_eq!(parsed, full);
+    assert!(matches!(
+        parse_header(&file[..header_end], (file.len() - 1) as u64),
+        Err(SafetensorsError::ByteRangeOutOfBounds { .. })
+    ));
+    assert!(matches!(
+        parse_header(&file[..header_end - 1], file.len() as u64),
+        Err(SafetensorsError::HeaderLengthExceedsFile { .. })
+    ));
+    assert!(matches!(
+        parse_header(&file[..header_end], 7),
+        Err(SafetensorsError::FileTooShortForHeaderLength { .. })
+    ));
+}
+
 /// `bind-materialized-weight-content-to-model-artifact-digests`: an F32
 /// tensor's `ModelTensorMetadata.digest` is a real content digest, not a
 /// placeholder -- it verifies against that exact tensor's real bytes as
@@ -81,10 +108,7 @@ fn f32_tensor_digest_verifies_against_its_real_bytes() {
     );
 }
 
-/// Non-`F32` dtypes cannot be materialized into a `HostTensor` without a
-/// re-encoding step this crate does not perform, so their content cannot
-/// be meaningfully digested here -- `digest: None` is correct, not an
-/// oversight.
+/// Integer tensor content is not normalized into a HostTensor here.
 #[test]
 fn non_f32_tensor_has_no_content_digest() {
     let header = r#"{"weight": {"dtype": "I8", "shape": [4], "data_offsets": [0, 4]}}"#;
@@ -93,6 +117,16 @@ fn non_f32_tensor_has_no_content_digest() {
 
     let artifact = parse(&file).expect("well-formed file parses");
     assert!(artifact.tensors[0].digest.is_none());
+}
+
+#[test]
+fn fp8_digest_binds_the_original_encoded_bytes() {
+    let header = r#"{"weight": {"dtype": "F8_E4M3", "shape": [4], "data_offsets": [0, 4]}}"#;
+    let data = [0x00, 0x38, 0x7e, 0xff];
+    let artifact = parse(&build_file(header, &data)).unwrap();
+    let digest = artifact.tensors[0].digest.as_ref().unwrap();
+    assert!(digest.verify_bytes(&data).is_ok());
+    assert!(digest.verify_bytes(&[0x00, 0x38, 0x7e, 0xfe]).is_err());
 }
 
 #[test]
@@ -105,6 +139,7 @@ fn every_standard_dtype_string_round_trips() {
         ("I16", ModelDType::I16, 2),
         ("F16", ModelDType::F16, 2),
         ("BF16", ModelDType::Bf16, 2),
+        ("F8_E4M3", ModelDType::F8E4M3Fn, 1),
         ("U32", ModelDType::U32, 4),
         ("I32", ModelDType::I32, 4),
         ("F32", ModelDType::F32, 4),
@@ -127,7 +162,7 @@ fn every_standard_dtype_string_round_trips() {
 
 #[test]
 fn unsupported_f8_dtype_is_rejected_structurally() {
-    let header = r#"{"t": {"dtype": "F8_E4M3", "shape": [1], "data_offsets": [0, 1]}}"#;
+    let header = r#"{"t": {"dtype": "F8_E5M2", "shape": [1], "data_offsets": [0, 1]}}"#;
     let file = build_file(header, &[0u8]);
     assert!(matches!(
         parse(&file),

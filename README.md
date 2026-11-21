@@ -19,9 +19,10 @@ reads the 8-byte header-length prefix, the JSON header, and normalizes every
 tensor entry into `ModelTensorMetadata` plus a flat `__metadata__` string
 map. Every standard Safetensors dtype string round-trips through
 `ModelDType::parse` (`BOOL`, `U8`/`I8`, `U16`/`I16`, `U32`/`I32`, `U64`/`I64`,
-`F16`, `BF16`, `F32`, `F64`); the two 8-bit float dtypes Safetensors also
-defines (`F8_E4M3`, `F8_E5M2`) have no `ModelDType` equivalent yet and are
-rejected structurally, not silently mapped.
+`F16`, `BF16`, `F32`, `F64`, `F8_E4M3`). E4M3 is represented as the distinct
+finite-only FP8 dtype, with one byte per value; `F8_E5M2` is still rejected.
+Parsing E4M3 does not make a scaled checkpoint executable: production
+loading must validate and apply its separate block scales first.
 
 Overflow and bounds safety: every offset/size computation uses checked
 arithmetic, declared tensor byte ranges are validated against the file's
