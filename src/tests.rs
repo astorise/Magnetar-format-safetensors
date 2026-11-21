@@ -105,6 +105,7 @@ fn every_standard_dtype_string_round_trips() {
         ("I16", ModelDType::I16, 2),
         ("F16", ModelDType::F16, 2),
         ("BF16", ModelDType::Bf16, 2),
+        ("F8_E4M3", ModelDType::F8E4M3Fn, 1),
         ("U32", ModelDType::U32, 4),
         ("I32", ModelDType::I32, 4),
         ("F32", ModelDType::F32, 4),
@@ -127,7 +128,7 @@ fn every_standard_dtype_string_round_trips() {
 
 #[test]
 fn unsupported_f8_dtype_is_rejected_structurally() {
-    let header = r#"{"t": {"dtype": "F8_E4M3", "shape": [1], "data_offsets": [0, 1]}}"#;
+    let header = r#"{"t": {"dtype": "F8_E5M2", "shape": [1], "data_offsets": [0, 1]}}"#;
     let file = build_file(header, &[0u8]);
     assert!(matches!(
         parse(&file),

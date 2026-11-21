@@ -27,10 +27,10 @@
 //!
 //! [`ModelDType::parse`] already accepts every standard Safetensors dtype
 //! string (`BOOL`, `U8`/`I8`, `U16`/`I16`, `U32`/`I32`, `U64`/`I64`, `F16`,
-//! `BF16`, `F32`, `F64` -- case-insensitively). The two 8-bit float dtypes
-//! Safetensors also defines (`F8_E4M3`, `F8_E5M2`) have no `ModelDType`
-//! equivalent yet and are rejected with [`SafetensorsError::UnknownDType`],
-//! not silently mapped to a nearby type.
+//! `BF16`, `F32`, `F64`, `F8_E4M3` -- case-insensitively). The E4M3
+//! variant is represented explicitly; `F8_E5M2` remains unsupported and is
+//! rejected with [`SafetensorsError::UnknownDType`]. Parsing its byte layout
+//! does not imply that a loader can execute it without block scales.
 
 use magnetar_runtime::model::{ModelDType, ModelDigest, ModelTensorMetadata};
 use std::collections::BTreeMap;
@@ -443,6 +443,7 @@ fn dtype_to_safetensors_string(dtype: ModelDType) -> Option<&'static str> {
         ModelDType::I16 => Some("I16"),
         ModelDType::F16 => Some("F16"),
         ModelDType::Bf16 => Some("BF16"),
+        ModelDType::F8E4M3Fn => Some("F8_E4M3"),
         ModelDType::U32 => Some("U32"),
         ModelDType::I32 => Some("I32"),
         ModelDType::F32 => Some("F32"),
@@ -473,7 +474,7 @@ fn dtype_to_safetensors_string(dtype: ModelDType) -> Option<&'static str> {
 /// them here (bounds/overflow checks on the declared range still apply).
 fn fixed_element_byte_width(dtype: ModelDType) -> Option<u64> {
     match dtype {
-        ModelDType::Bool | ModelDType::U8 | ModelDType::I8 => Some(1),
+        ModelDType::Bool | ModelDType::U8 | ModelDType::I8 | ModelDType::F8E4M3Fn => Some(1),
         ModelDType::U16 | ModelDType::I16 | ModelDType::F16 | ModelDType::Bf16 => Some(2),
         ModelDType::U32 | ModelDType::I32 | ModelDType::F32 => Some(4),
         ModelDType::U64 | ModelDType::I64 | ModelDType::F64 => Some(8),
