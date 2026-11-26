@@ -27,10 +27,10 @@
 //!
 //! [`ModelDType::parse`] already accepts every standard Safetensors dtype
 //! string (`BOOL`, `U8`/`I8`, `U16`/`I16`, `U32`/`I32`, `U64`/`I64`, `F16`,
-//! `BF16`, `F32`, `F64` -- case-insensitively). The two 8-bit float dtypes
-//! Safetensors also defines (`F8_E4M3`, `F8_E5M2`) have no `ModelDType`
-//! equivalent yet and are rejected with [`SafetensorsError::UnknownDType`],
-//! not silently mapped to a nearby type.
+//! `BF16`, `F32`, `F64`, `F8_E4M3` -- case-insensitively). The E4M3
+//! variant is represented explicitly; `F8_E5M2` remains unsupported and is
+//! rejected with [`SafetensorsError::UnknownDType`]. Parsing its byte layout
+//! does not imply that a loader can execute it without block scales.
 
 use magnetar_runtime::model::{ModelDType, ModelDigest, ModelTensorMetadata};
 use std::collections::BTreeMap;
@@ -167,9 +167,31 @@ impl std::error::Error for SafetensorsError {}
 /// Parses a complete Safetensors file already held in memory. See the
 /// module documentation for the format and safety discipline.
 pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
-    if bytes.len() < HEADER_LENGTH_PREFIX_BYTES {
+    parse_inner(bytes, bytes.len() as u64, true)
+}
+
+/// Parses a header without loading the file's tensor payloads. `header_bytes`
+/// must contain the length prefix and the entire declared JSON header, and
+/// `file_length` must be the actual size obtained from the open file. Tensor
+/// ranges are checked against that length exactly as in [`parse`]. No content
+/// digests are returned because this function has not read the payloads.
+pub fn parse_header(
+    header_bytes: &[u8],
+    file_length: u64,
+) -> Result<SafetensorsArtifact, SafetensorsError> {
+    parse_inner(header_bytes, file_length, false)
+}
+
+fn parse_inner(
+    bytes: &[u8],
+    file_length: u64,
+    hash_payload: bool,
+) -> Result<SafetensorsArtifact, SafetensorsError> {
+    if bytes.len() < HEADER_LENGTH_PREFIX_BYTES || file_length < HEADER_LENGTH_PREFIX_BYTES as u64 {
         return Err(SafetensorsError::FileTooShortForHeaderLength {
-            file_length: bytes.len(),
+            file_length: bytes
+                .len()
+                .min(usize::try_from(file_length).unwrap_or(usize::MAX)),
         });
     }
     let header_length_bytes: [u8; HEADER_LENGTH_PREFIX_BYTES] = bytes[..HEADER_LENGTH_PREFIX_BYTES]
@@ -179,7 +201,8 @@ pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
 
     // `bytes.len()` is an already-trusted, already-allocated slice length;
     // widening it to `u64` can never truncate on any real Rust target.
-    let available = (bytes.len() - HEADER_LENGTH_PREFIX_BYTES) as u64;
+    let available = ((bytes.len() - HEADER_LENGTH_PREFIX_BYTES) as u64)
+        .min(file_length - HEADER_LENGTH_PREFIX_BYTES as u64);
     if header_length > available {
         return Err(SafetensorsError::HeaderLengthExceedsFile {
             declared: header_length,
@@ -205,7 +228,7 @@ pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
         .as_object()
         .ok_or(SafetensorsError::HeaderNotJsonObject)?;
 
-    let data_section_length = available - header_length as u64;
+    let data_section_length = file_length - header_end as u64;
 
     let mut tensors = Vec::with_capacity(header_object.len());
     let mut metadata = BTreeMap::new();
@@ -291,23 +314,11 @@ pub fn parse(bytes: &[u8]) -> Result<SafetensorsArtifact, SafetensorsError> {
         }
 
         ranges.push((start, end, name.clone()));
-        // A real content digest, computed from this tensor's actual bytes
-        // in the file -- not a placeholder. Only for `F32`: that is the
-        // one dtype `magnetar-runtime`'s `host_tensors_from_artifact_bytes`
-        // materializes into a `HostTensor` today (every other declared
-        // dtype is rejected structurally at that boundary), and
-        // Safetensors' own on-disk `F32` byte layout -- raw, native-width,
-        // little-endian IEEE754 -- is already byte-identical to
-        // `HostTensor::content_bytes()`'s canonical little-endian
-        // representation, so no re-encoding step could introduce a
-        // mismatch between what is hashed here and what
-        // `WeightMaterializationTransaction::stage_weight` verifies later.
-        // Other dtypes stay `digest: None` -- permissive, not a
-        // regression, matching this field's own "absent means unknown"
-        // semantics; they cannot be verified this way without first
-        // defining a canonical byte representation for each, which is
-        // future work, not something to guess at here.
-        let digest = (dtype == ModelDType::F32)
+        // F32's stored bytes already match the materialized HostTensor.
+        // E4M3FN's digest instead binds the raw bytes for its loader's
+        // on-demand conversion; the converted F32 tensor must clear it.
+        // Other converted dtypes have no canonical stored-byte digest yet.
+        let digest = (hash_payload && matches!(dtype, ModelDType::F32 | ModelDType::F8E4M3Fn))
             .then(|| {
                 let tensor_start = header_end
                     .checked_add(usize::try_from(start).ok()?)
@@ -443,6 +454,7 @@ fn dtype_to_safetensors_string(dtype: ModelDType) -> Option<&'static str> {
         ModelDType::I16 => Some("I16"),
         ModelDType::F16 => Some("F16"),
         ModelDType::Bf16 => Some("BF16"),
+        ModelDType::F8E4M3Fn => Some("F8_E4M3"),
         ModelDType::U32 => Some("U32"),
         ModelDType::I32 => Some("I32"),
         ModelDType::F32 => Some("F32"),
@@ -473,7 +485,7 @@ fn dtype_to_safetensors_string(dtype: ModelDType) -> Option<&'static str> {
 /// them here (bounds/overflow checks on the declared range still apply).
 fn fixed_element_byte_width(dtype: ModelDType) -> Option<u64> {
     match dtype {
-        ModelDType::Bool | ModelDType::U8 | ModelDType::I8 => Some(1),
+        ModelDType::Bool | ModelDType::U8 | ModelDType::I8 | ModelDType::F8E4M3Fn => Some(1),
         ModelDType::U16 | ModelDType::I16 | ModelDType::F16 | ModelDType::Bf16 => Some(2),
         ModelDType::U32 | ModelDType::I32 | ModelDType::F32 => Some(4),
         ModelDType::U64 | ModelDType::I64 | ModelDType::F64 => Some(8),
